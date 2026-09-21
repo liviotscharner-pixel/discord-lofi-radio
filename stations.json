@@ -2,19 +2,19 @@
   {
     "id": "hiphop",
     "name": "Lofi HipHop",
-    "url": "https://ice1.somafm.com/fluid-128-mp3",
-    "description": "Instrumentaler HipHop, Future Soul & liquid Trap – SomaFM Fluid"
+    "url": "https://www.youtube.com/watch?v=n61ULEU7CO0",
+    "description": "Lofi HipHop Mix (YouTube, Endlosschleife)"
   },
   {
     "id": "house",
     "name": "Lofi House",
-    "url": "https://ice1.somafm.com/beatblender-128-mp3",
-    "description": "Deep House & Downtempo Chill – SomaFM Beat Blender"
+    "url": "https://www.youtube.com/watch?v=n__NrG-QGb4",
+    "description": "Lofi House Mix (YouTube, Endlosschleife)"
   },
   {
     "id": "gaming",
     "name": "Lofi Gaming Music",
-    "url": "https://ice1.somafm.com/defcon-128-mp3",
-    "description": "Elektronische Beats mit Gaming-/Hacker-Vibes – SomaFM DEF CON Radio"
+    "url": "https://www.youtube.com/watch?v=iYiTc67nozs",
+    "description": "Lofi Gaming Mix (YouTube, Endlosschleife)"
   }
 ]

@@ -4,6 +4,7 @@ import {
   AudioResource,
   createAudioPlayer,
   createAudioResource,
+  demuxProbe,
   entersState,
   joinVoiceChannel,
   NoSubscriberBehavior,
@@ -12,6 +13,7 @@ import {
   VoiceConnectionStatus,
   DiscordGatewayAdapterCreator,
 } from '@discordjs/voice';
+import { spawn, type ChildProcess } from 'child_process';
 import { GuildMember } from 'discord.js';
 import { getStation, STATIONS } from '../stations';
 import type { Station } from '../types';
@@ -22,10 +24,25 @@ interface GuildRadioState {
   station: Station;
   channelId: string;
   textChannelId: string | null;
+  sourceProcess: ChildProcess | null;
+  restarting: boolean;
+}
+
+function isYouTubeUrl(url: string): boolean {
+  try {
+    const u = new URL(url);
+    return (
+      u.hostname.includes('youtube.com') ||
+      u.hostname.includes('youtu.be') ||
+      u.hostname.includes('youtube-nocookie.com')
+    );
+  } catch {
+    return false;
+  }
 }
 
 /**
- * Manages one radio session per guild: join, play stream, switch, stop.
+ * Manages one radio session per guild: join, play stream/YouTube, switch, stop, loop.
  */
 export class RadioManager {
   private readonly sessions = new Map<string, GuildRadioState>();
@@ -78,7 +95,7 @@ export class RadioManager {
 
     const existing = this.sessions.get(member.guild.id);
     if (existing && existing.channelId === channel.id) {
-      this.startStream(existing, station);
+      await this.startStream(existing, station);
       if (textChannelId) existing.textChannelId = textChannelId;
       return { station, switched: true };
     }
@@ -110,6 +127,8 @@ export class RadioManager {
       station,
       channelId: channel.id,
       textChannelId: textChannelId ?? null,
+      sourceProcess: null,
+      restarting: false,
     };
 
     this.wireLifecycle(member.guild.id, session);
@@ -122,13 +141,6 @@ export class RadioManager {
       console.error(
         `[radio] Voice Ready timeout. status=${status}`,
         err instanceof Error ? err.message : err,
-        JSON.stringify(connection.state, (_k, v) =>
-          typeof v === 'object' && v && 'closeCode' in (v as object)
-            ? v
-            : v instanceof Error
-              ? v.message
-              : v,
-        ).slice(0, 500),
       );
       this.destroySession(member.guild.id);
       throw new RadioError(
@@ -137,7 +149,7 @@ export class RadioManager {
       );
     }
 
-    this.startStream(session, station);
+    await this.startStream(session, station);
     return { station, switched: false };
   }
 
@@ -153,7 +165,7 @@ export class RadioManager {
     if (!station) {
       throw new RadioError('Unbekannter Sender.', true);
     }
-    this.startStream(session, station);
+    await this.startStream(session, station);
     return station;
   }
 
@@ -163,10 +175,14 @@ export class RadioManager {
     return true;
   }
 
-  private startStream(session: GuildRadioState, station: Station): void {
+  private async startStream(
+    session: GuildRadioState,
+    station: Station,
+  ): Promise<void> {
     session.station = station;
+    this.killSource(session);
     try {
-      const resource = this.createStreamResource(station.url);
+      const resource = await this.createStreamResource(session, station.url);
       session.player.play(resource);
     } catch (err) {
       console.error(`[radio] Failed to start stream ${station.id}:`, err);
@@ -177,13 +193,57 @@ export class RadioManager {
     }
   }
 
-  private createStreamResource(url: string): AudioResource {
-    // FFmpeg (must be on PATH) demuxes Icecast/MP3 into Opus-ready PCM.
-    return createAudioResource(url, {
-      inputType: StreamType.Arbitrary,
-      inlineVolume: false,
-      metadata: { url },
+  private async createStreamResource(
+    session: GuildRadioState,
+    url: string,
+  ): Promise<AudioResource> {
+    if (!isYouTubeUrl(url)) {
+      return createAudioResource(url, {
+        inputType: StreamType.Arbitrary,
+        inlineVolume: false,
+        metadata: { url },
+      });
+    }
+
+    const proc = spawn(
+      'yt-dlp',
+      [
+        '-o',
+        '-',
+        '-f',
+        'bestaudio[ext=webm]/bestaudio[ext=m4a]/bestaudio/best',
+        '--no-playlist',
+        '--quiet',
+        '--no-warnings',
+        url,
+      ],
+      { stdio: ['ignore', 'pipe', 'pipe'] },
+    );
+    session.sourceProcess = proc;
+
+    proc.stderr.on('data', (buf: Buffer) => {
+      const msg = buf.toString().trim();
+      if (msg) console.error(`[yt-dlp] ${msg.slice(0, 300)}`);
     });
+
+    proc.on('error', (err) => {
+      console.error('[yt-dlp] spawn error:', err.message);
+    });
+
+    if (!proc.stdout) {
+      throw new Error('yt-dlp stdout missing');
+    }
+
+    try {
+      const { stream, type } = await demuxProbe(proc.stdout);
+      return createAudioResource(stream, {
+        inputType: type,
+        metadata: { url },
+      });
+    } catch (err) {
+      this.killSource(session);
+      throw err;
+    }
   }
 
   private wireLifecycle(guildId: string, session: GuildRadioState): void {
@@ -200,22 +260,48 @@ export class RadioManager {
 
     session.player.on('error', (error) => {
       console.error(`[radio] Player error in guild ${guildId}:`, error.message);
-      const current = this.sessions.get(guildId);
-      if (current && current.player === session.player) {
-        try {
-          const resource = this.createStreamResource(current.station.url);
-          current.player.play(resource);
-        } catch (restartErr) {
-          console.error(`[radio] Restart failed:`, restartErr);
-        }
-      }
+      void this.restartCurrent(guildId, session);
     });
+
+    session.player.on(AudioPlayerStatus.Idle, () => {
+      // End of YouTube mix (or dropped stream) → loop forever while session lives.
+      void this.restartCurrent(guildId, session);
+    });
+  }
+
+  private async restartCurrent(
+    guildId: string,
+    session: GuildRadioState,
+  ): Promise<void> {
+    const current = this.sessions.get(guildId);
+    if (!current || current.player !== session.player) return;
+    if (current.restarting) return;
+    current.restarting = true;
+    try {
+      await this.startStream(current, current.station);
+    } catch (err) {
+      console.error(`[radio] Loop restart failed:`, err);
+    } finally {
+      current.restarting = false;
+    }
+  }
+
+  private killSource(session: GuildRadioState): void {
+    const proc = session.sourceProcess;
+    session.sourceProcess = null;
+    if (!proc || proc.killed) return;
+    try {
+      proc.kill('SIGKILL');
+    } catch {
+      /* ignore */
+    }
   }
 
   private destroySession(guildId: string): void {
     const session = this.sessions.get(guildId);
     if (!session) return;
     this.sessions.delete(guildId);
+    this.killSource(session);
     try {
       session.player.stop(true);
     } catch {
