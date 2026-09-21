@@ -1,5 +1,18 @@
 import dotenv from 'dotenv';
 dotenv.config({ override: true });
+import { createRequire } from 'node:module';
+const nodeRequire = createRequire(__filename);
+try {
+  nodeRequire('sodium-native');
+} catch {
+  /* optional */
+}
+try {
+  nodeRequire('tweetnacl');
+} catch {
+  /* optional */
+}
+
 import {
   ActivityType,
   Client,
