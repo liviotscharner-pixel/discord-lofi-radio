@@ -109,7 +109,7 @@ export class RadioManager {
       guildId: channel.guild.id,
       adapterCreator: channel.guild
         .voiceAdapterCreator as DiscordGatewayAdapterCreator,
-      selfDeaf: true,
+      selfDeaf: false,
       selfMute: false,
     });
 
@@ -135,7 +135,7 @@ export class RadioManager {
     this.sessions.set(member.guild.id, session);
 
     try {
-      await entersState(connection, VoiceConnectionStatus.Ready, 30_000);
+      await this.waitUntilReady(connection, 45_000);
     } catch (err) {
       const status = connection.state.status;
       console.error(
@@ -199,7 +199,7 @@ export class RadioManager {
       channelId: channel.id,
       guildId: guild.id,
       adapterCreator: guild.voiceAdapterCreator as DiscordGatewayAdapterCreator,
-      selfDeaf: true,
+      selfDeaf: false,
       selfMute: false,
     });
 
@@ -225,7 +225,7 @@ export class RadioManager {
     this.sessions.set(guild.id, session);
 
     try {
-      await entersState(connection, VoiceConnectionStatus.Ready, 30_000);
+      await this.waitUntilReady(connection, 45_000);
     } catch (err) {
       console.error(
         `[radio] Voice Ready timeout (auto). status=${connection.state.status}`,
@@ -262,6 +262,53 @@ export class RadioManager {
     if (!this.sessions.has(guildId)) return false;
     this.destroySession(guildId);
     return true;
+  }
+
+
+  private async waitUntilReady(
+    connection: VoiceConnection,
+    timeoutMs: number,
+  ): Promise<void> {
+    const started = Date.now();
+    const onChange = (oldState: { status: string }, newState: { status: string }) => {
+      console.log(`[voice] ${oldState.status} -> ${newState.status}`);
+    };
+    connection.on('stateChange', onChange as never);
+
+    try {
+      while (Date.now() - started < timeoutMs) {
+        const status = connection.state.status;
+        if (status === VoiceConnectionStatus.Ready) return;
+        if (status === VoiceConnectionStatus.Destroyed) {
+          throw new Error('Voice connection destroyed before Ready');
+        }
+
+        const elapsed = Date.now() - started;
+        if (
+          (status === VoiceConnectionStatus.Signalling ||
+            status === VoiceConnectionStatus.Connecting ||
+            status === VoiceConnectionStatus.Disconnected) &&
+          elapsed > 10_000
+        ) {
+          // Rejoin at most once around the 10s mark.
+          if (elapsed < 11_000) {
+            console.log(`[voice] ${status} after ${elapsed}ms — rejoin()`);
+            try {
+              connection.rejoin();
+            } catch (e) {
+              console.error('[voice] rejoin failed', e);
+            }
+          }
+        }
+
+        await new Promise((r) => setTimeout(r, 500));
+      }
+      throw new Error(
+        `Voice Ready timeout after ${timeoutMs}ms (last=${connection.state.status})`,
+      );
+    } finally {
+      connection.off('stateChange', onChange as never);
+    }
   }
 
   private async startStream(
@@ -336,11 +383,9 @@ export class RadioManager {
   }
 
   private wireLifecycle(guildId: string, session: GuildRadioState): void {
-    session.connection.on('stateChange', (_old, state) => {
-      if (
-        state.status === VoiceConnectionStatus.Disconnected ||
-        state.status === VoiceConnectionStatus.Destroyed
-      ) {
+    session.connection.on('stateChange', (oldState, state) => {
+      console.log(`[voice:${guildId}] ${oldState.status} -> ${state.status}`);
+      if (state.status === VoiceConnectionStatus.Destroyed) {
         if (this.sessions.get(guildId)?.connection === session.connection) {
           this.destroySession(guildId);
         }
