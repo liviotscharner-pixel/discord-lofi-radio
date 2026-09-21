@@ -1,7 +1,7 @@
 {
   "name": "discord-lofi-radio",
   "version": "1.0.0",
-  "description": "Discord Lofi Radio Bot \u2013 spielt kontinuierliche Lofi-Streams in Voice-Channels",
+  "description": "Discord Lofi Radio Bot – spielt kontinuierliche Lofi-Streams in Voice-Channels",
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
@@ -22,9 +22,10 @@
   "license": "MIT",
   "dependencies": {
     "@discordjs/voice": "^0.18.0",
+    "@stablelib/xchacha20poly1305": "^2.0.1",
     "discord.js": "^14.16.3",
     "dotenv": "^16.4.7",
-    "libsodium-wrappers": "^0.7.15",
+    "libsodium-wrappers": "^0.7.16",
     "opusscript": "^0.0.8",
     "tweetnacl": "^1.0.3"
   },

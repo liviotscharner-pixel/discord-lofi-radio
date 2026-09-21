@@ -116,8 +116,20 @@ export class RadioManager {
     this.sessions.set(member.guild.id, session);
 
     try {
-      await entersState(connection, VoiceConnectionStatus.Ready, 20_000);
-    } catch {
+      await entersState(connection, VoiceConnectionStatus.Ready, 30_000);
+    } catch (err) {
+      const status = connection.state.status;
+      console.error(
+        `[radio] Voice Ready timeout. status=${status}`,
+        err instanceof Error ? err.message : err,
+        JSON.stringify(connection.state, (_k, v) =>
+          typeof v === 'object' && v && 'closeCode' in (v as object)
+            ? v
+            : v instanceof Error
+              ? v.message
+              : v,
+        ).slice(0, 500),
+      );
       this.destroySession(member.guild.id);
       throw new RadioError(
         'Verbindung zum Voice-Channel fehlgeschlagen. Bitte erneut versuchen.',
