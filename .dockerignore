@@ -1,0 +1,7 @@
+node_modules
+dist
+.git
+.env
+.discord_token
+assets
+*.md
