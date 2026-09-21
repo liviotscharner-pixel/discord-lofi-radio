@@ -3,18 +3,21 @@
     "id": "hiphop",
     "name": "Lofi HipHop",
     "url": "https://www.youtube.com/watch?v=n61ULEU7CO0",
-    "description": "Lofi HipHop Mix (YouTube, Endlosschleife)"
+    "description": "Lofi HipHop Mix (YouTube, Endlosschleife)",
+    "voiceChannelId": "1550409888855756892"
   },
   {
     "id": "house",
     "name": "Lofi House",
     "url": "https://www.youtube.com/watch?v=n__NrG-QGb4",
-    "description": "Lofi House Mix (YouTube, Endlosschleife)"
+    "description": "Lofi House Mix (YouTube, Endlosschleife)",
+    "voiceChannelId": "1551535931759271936"
   },
   {
     "id": "gaming",
     "name": "Lofi Gaming Music",
     "url": "https://www.youtube.com/watch?v=iYiTc67nozs",
-    "description": "Lofi Gaming Mix (YouTube, Endlosschleife)"
+    "description": "Lofi Gaming Mix (YouTube, Endlosschleife)",
+    "voiceChannelId": "1551536078153064489"
   }
 ]

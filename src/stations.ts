@@ -7,6 +7,12 @@ export function getStation(id: string): Station | undefined {
   return STATIONS.find((s) => s.id === id);
 }
 
+export function getStationByVoiceChannelId(
+  channelId: string,
+): Station | undefined {
+  return STATIONS.find((s) => s.voiceChannelId === channelId);
+}
+
 export function isStationId(id: string): id is StationId {
   return STATIONS.some((s) => s.id === id);
 }

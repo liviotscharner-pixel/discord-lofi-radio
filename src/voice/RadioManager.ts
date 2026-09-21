@@ -14,7 +14,7 @@ import {
   DiscordGatewayAdapterCreator,
 } from '@discordjs/voice';
 import { spawn, type ChildProcess } from 'child_process';
-import { GuildMember } from 'discord.js';
+import { Guild, GuildMember, VoiceBasedChannel } from 'discord.js';
 import { getStation, STATIONS } from '../stations';
 import type { Station } from '../types';
 
@@ -143,6 +143,95 @@ export class RadioManager {
         err instanceof Error ? err.message : err,
       );
       this.destroySession(member.guild.id);
+      throw new RadioError(
+        'Verbindung zum Voice-Channel fehlgeschlagen. Bitte erneut versuchen.',
+        true,
+      );
+    }
+
+    await this.startStream(session, station);
+    return { station, switched: false };
+  }
+
+
+  /**
+   * Join a specific voice channel and play a station (used for auto-start).
+   */
+  async playInChannel(
+    guild: Guild,
+    channel: VoiceBasedChannel,
+    stationId: string,
+  ): Promise<{ station: Station; switched: boolean }> {
+    const station = getStation(stationId);
+    if (!station) {
+      throw new RadioError('Unbekannter Sender.', true);
+    }
+
+    const me = guild.members.me;
+    const permissions = channel.permissionsFor(me!);
+    if (!permissions?.has(['Connect', 'Speak'])) {
+      throw new RadioError(
+        'Mir fehlen die Berechtigungen **Verbinden** und **Sprechen** in diesem Channel.',
+        true,
+      );
+    }
+    if (!channel.joinable) {
+      throw new RadioError(
+        'Ich kann diesem Voice-Channel nicht beitreten (voll oder gesperrt).',
+        true,
+      );
+    }
+
+    const existing = this.sessions.get(guild.id);
+    if (existing && existing.channelId === channel.id) {
+      // Already in this channel — only (re)start if station differs or not playing.
+      if (existing.station.id !== station.id || existing.player.state.status === AudioPlayerStatus.Idle) {
+        await this.startStream(existing, station);
+      }
+      return { station, switched: existing.station.id !== station.id };
+    }
+
+    if (existing) {
+      this.destroySession(guild.id);
+    }
+
+    const connection = joinVoiceChannel({
+      channelId: channel.id,
+      guildId: guild.id,
+      adapterCreator: guild.voiceAdapterCreator as DiscordGatewayAdapterCreator,
+      selfDeaf: true,
+      selfMute: false,
+    });
+
+    const player = createAudioPlayer({
+      behaviors: {
+        noSubscriber: NoSubscriberBehavior.Play,
+      },
+    });
+
+    connection.subscribe(player);
+
+    const session: GuildRadioState = {
+      connection,
+      player,
+      station,
+      channelId: channel.id,
+      textChannelId: null,
+      sourceProcess: null,
+      restarting: false,
+    };
+
+    this.wireLifecycle(guild.id, session);
+    this.sessions.set(guild.id, session);
+
+    try {
+      await entersState(connection, VoiceConnectionStatus.Ready, 30_000);
+    } catch (err) {
+      console.error(
+        `[radio] Voice Ready timeout (auto). status=${connection.state.status}`,
+        err instanceof Error ? err.message : err,
+      );
+      this.destroySession(guild.id);
       throw new RadioError(
         'Verbindung zum Voice-Channel fehlgeschlagen. Bitte erneut versuchen.',
         true,
@@ -295,6 +384,24 @@ export class RadioManager {
     } catch {
       /* ignore */
     }
+  }
+
+
+  /** Leave and stop if no non-bot members remain in the bot's current channel. */
+  maybeStopIfChannelEmpty(guild: Guild): boolean {
+    const session = this.sessions.get(guild.id);
+    if (!session) return false;
+    const channel = guild.channels.cache.get(session.channelId);
+    if (!channel || !channel.isVoiceBased()) {
+      this.destroySession(guild.id);
+      return true;
+    }
+    const humans = channel.members.filter((m) => !m.user.bot);
+    if (humans.size === 0) {
+      this.destroySession(guild.id);
+      return true;
+    }
+    return false;
   }
 
   private destroySession(guildId: string): void {

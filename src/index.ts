@@ -20,7 +20,7 @@ import {
   idleEmbed,
   nowPlayingEmbed,
 } from './ui/controls';
-import { isStationId } from './stations';
+import { STATIONS, getStationByVoiceChannelId, isStationId } from './stations';
 
 const token = process.env.DISCORD_TOKEN;
 const clientId = process.env.DISCORD_CLIENT_ID;
@@ -242,6 +242,30 @@ async function handleStationSwitch(
   }
 }
 
+async function autoStartMappedChannels(guildId: string): Promise<void> {
+  const guild = await client.guilds.fetch(guildId).catch(() => null);
+  if (!guild) return;
+  await guild.channels.fetch().catch(() => undefined);
+
+  for (const station of STATIONS) {
+    if (!station.voiceChannelId) continue;
+    const channel = guild.channels.cache.get(station.voiceChannelId);
+    if (!channel || !channel.isVoiceBased()) continue;
+    const humans = channel.members.filter((m) => !m.user.bot);
+    if (humans.size === 0) continue;
+    try {
+      console.log(
+        `[auto] Starte ${station.name} in #${channel.name} (${humans.size} Hörer)`,
+      );
+      await radio.playInChannel(guild, channel, station.id);
+      // One voice connection per guild — prefer the first occupied mapped channel.
+      return;
+    } catch (err) {
+      console.error(`[auto] Start fehlgeschlagen für ${station.id}:`, err);
+    }
+  }
+}
+
 client.once(Events.ClientReady, async (c) => {
   console.log(`Eingeloggt als ${c.user.tag}`);
   try {
@@ -250,6 +274,38 @@ client.once(Events.ClientReady, async (c) => {
     console.error('Command-Registrierung fehlgeschlagen:', err);
   }
   c.user.setActivity('Lofi Radio 🎧', { type: ActivityType.Listening });
+
+  if (guildId) {
+    await autoStartMappedChannels(guildId);
+  }
+});
+
+client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
+  try {
+    if (newState.member?.user.bot) return;
+
+    const joinedId = newState.channelId;
+    const leftId = oldState.channelId;
+    const moved = joinedId && joinedId !== leftId;
+
+    if (moved && joinedId) {
+      const station = getStationByVoiceChannelId(joinedId);
+      if (station && newState.guild && newState.channel?.isVoiceBased()) {
+        console.log(
+          `[auto] ${newState.member?.user.tag ?? 'user'} → #${newState.channel.name} → ${station.name}`,
+        );
+        await radio.playInChannel(newState.guild, newState.channel, station.id);
+        return;
+      }
+    }
+
+    // Stop when the last human leaves the channel the bot is playing in.
+    if (leftId && leftId !== joinedId && oldState.guild) {
+      radio.maybeStopIfChannelEmpty(oldState.guild);
+    }
+  } catch (err) {
+    console.error('[auto] VoiceStateUpdate error:', err);
+  }
 });
 
 client.on(Events.InteractionCreate, async (interaction) => {
